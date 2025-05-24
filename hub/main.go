@@ -28,14 +28,18 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
+type subscriptionKey struct {
+	Callback string
+	Topic    string
+}
 type Hub struct {
-	subscribers map[string]string // callback URL -> secret
+	subscribers map[subscriptionKey]string // secret
 	mu          sync.Mutex
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		subscribers: make(map[string]string),
+		subscribers: make(map[subscriptionKey]string),
 	}
 }
 
@@ -73,8 +77,13 @@ func (h *Hub) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 	secret := r.FormValue("hub.secret")
 	log.Printf("Received subscription: callback=%s topic=%s mode=%s", callback, topic, mode)
 
-	//all posts back need sign so require secret.
-	if callback == "" || topic == "" || mode != "subscribe" || secret == "" || len(secret) > 199 {
+	if callback == "" || topic == "" || (mode != "subscribe" && mode != "unsubscribe") {
+		http.Error(w, "Invalid subscription request", http.StatusBadRequest)
+		return
+	}
+
+	//all posts back need sign so require secret (when subscribing only).
+	if mode == "subscribe" && (secret == "" || len(secret) > 199) {
 		http.Error(w, "Invalid subscription request", http.StatusBadRequest)
 		return
 	}
@@ -105,10 +114,15 @@ func (h *Hub) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	key := subscriptionKey{Callback: callback, Topic: topic}
 	h.mu.Lock()
-	h.subscribers[callback] = secret
+	if mode == "subscribe" {
+		h.subscribers[key] = secret
+	}
+	if mode == "unsubscribe" {
+		delete(h.subscribers, key)
+	}
 	h.mu.Unlock()
-
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -124,15 +138,15 @@ func (h *Hub) HandlePublish(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(data)
 
 	h.mu.Lock()
-	for callback, secret := range h.subscribers {
-		go postToSubscriber(callback, body, secret)
+	for subKey, secret := range h.subscribers {
+		go postToSubscriber(subKey, body, secret)
 	}
 	h.mu.Unlock()
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func postToSubscriber(callback string, body []byte, secret string) {
-	req, err := http.NewRequest("POST", callback, bytes.NewReader(body))
+func postToSubscriber(subKey subscriptionKey, body []byte, secret string) {
+	req, err := http.NewRequest("POST", subKey.Callback, bytes.NewReader(body))
 	if err != nil {
 		return
 	}
