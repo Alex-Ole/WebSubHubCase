@@ -91,16 +91,15 @@ func (h *Hub) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 	key := subscriptionKey{Callback: callback, Topic: topic}
 	if mode == "subscribe" {
-		go verifySub(key, h, secret, denialURL)
+		go verifySub(key, denialURL, mode, h, secret)
 	}
 	if mode == "unsubscribe" {
-		h.mu.Lock()
-		delete(h.subscribers, key)
-		h.mu.Unlock()
+		go verifySub(key, denialURL, mode, h, h.subscribers[key])
 	}
+
 }
 
-func verifySub(key subscriptionKey, hub *Hub, secret string, denialURL *url.URL) {
+func verifySub(key subscriptionKey, denialURL *url.URL, mode string, hub *Hub, secret string) {
 	challenge := generateRandomString(ChallengeLength)
 	format := "%s?hub.mode=subscribe&hub.topic=%s&hub.challenge=%s"
 	verifyURL := fmt.Sprintf(format, key.Callback, key.Topic, challenge)
@@ -122,7 +121,12 @@ func verifySub(key subscriptionKey, hub *Hub, secret string, denialURL *url.URL)
 		return
 	}
 	hub.mu.Lock()
-	hub.subscribers[key] = secret
+	if mode == "subscribe" {
+		hub.subscribers[key] = secret
+	}
+	if mode == "unsubscribe" {
+		delete(hub.subscribers, key)
+	}
 	hub.mu.Unlock()
 }
 
