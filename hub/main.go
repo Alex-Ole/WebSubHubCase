@@ -52,12 +52,14 @@ func (h *Hub) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 	contentType := r.Header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil || mediaType != "application/x-www-form-urlencoded" {
+		log.Printf("Received request with incorrect mediaType: %s", mediaType)
 		http.Error(w, "Unsupported Media Type", http.StatusUnsupportedMediaType)
 		return
 	}
-	charset, ok := params["charset"]
-	if !ok || strings.ToLower(charset) != "utf-8" {
-		http.Error(w, "Missing or invalid charset; only UTF-8 is supported", http.StatusUnsupportedMediaType)
+	// Spec requires UTF-8 but subscriber does not send it explicitly, so only check if it is included.
+	if charset, ok := params["charset"]; ok && strings.ToLower(charset) != "utf-8" {
+		log.Printf("Received request with unsupported charset: %s", charset)
+		http.Error(w, "Unsupported Charset; only UTF-8 is supported", http.StatusUnsupportedMediaType)
 		return
 	}
 	parseErr := r.ParseForm()
