@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -40,11 +41,32 @@ func NewHub() *Hub {
 
 // HandleSubscribe processes subscription requests and verifies intent.
 func (h *Hub) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	parseErr := r.ParseForm()
 	if parseErr != nil {
 		http.Error(w, "Invalid subscription request", http.StatusBadRequest)
 		return
 	}
+	contentType := r.Header.Get("Content-Type")
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil || mediaType != "application/x-www-form-urlencoded" {
+		http.Error(w, "Unsupported Media Type", http.StatusUnsupportedMediaType)
+		return
+	}
+	charset, ok := params["charset"]
+	if !ok || strings.ToLower(charset) != "utf-8" {
+		http.Error(w, "Missing or invalid charset; only UTF-8 is supported", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	if charset, ok := params["charset"]; ok && strings.ToLower(charset) != "utf-8" {
+		http.Error(w, "Unsupported Charset", http.StatusUnsupportedMediaType)
+		return
+	}
+
 	callback := r.FormValue("hub.callback")
 	topic := r.FormValue("hub.topic")
 	mode := r.FormValue("hub.mode")
@@ -91,6 +113,10 @@ func (h *Hub) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) HandlePublish(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	log.Printf("Received publish request")
 	data := map[string]string{
 		"message": "Hello from WebSub Hub!",
