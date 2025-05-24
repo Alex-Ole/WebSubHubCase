@@ -90,20 +90,18 @@ func (h *Hub) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusAccepted)
 	key := subscriptionKey{Callback: callback, Topic: topic}
-	if mode == "subscribe" {
-		go verifySub(key, h, secret, denialURL)
-	}
 	if mode == "unsubscribe" {
-		h.mu.Lock()
-		delete(h.subscribers, key)
-		h.mu.Unlock()
+		secret = h.subscribers[key]
 	}
+	//should skip unsub verification since sub removes endpoint too early?
+	go verifySub(key, denialURL, mode, secret, h)
 }
 
-func verifySub(key subscriptionKey, hub *Hub, secret string, denialURL *url.URL) {
+func verifySub(key subscriptionKey, denialURL *url.URL, mode string, secret string, hub *Hub) {
 	challenge := generateRandomString(ChallengeLength)
-	format := "%s?hub.mode=subscribe&hub.topic=%s&hub.challenge=%s"
-	verifyURL := fmt.Sprintf(format, key.Callback, key.Topic, challenge)
+	format := "%s?hub.mode=%s&hub.topic=%s&hub.challenge=%s"
+	verifyURL := fmt.Sprintf(format, key.Callback, mode, key.Topic, challenge)
+	log.Printf("sending verification to %s: ", verifyURL)
 	resp, err := http.Get(verifyURL)
 	if err != nil {
 		log.Printf("Failed to reach subscriber on verification: %v", err)
@@ -117,13 +115,20 @@ func verifySub(key subscriptionKey, hub *Hub, secret string, denialURL *url.URL)
 	if resp.StatusCode != http.StatusOK ||
 		bodyErr != nil ||
 		strings.TrimSpace(string(body)) != challenge {
-		log.Printf("Intent verification failed: %v", err)
+		log.Printf("Intent verification failed: %v", bodyErr)
 		sendDenial(denialURL, key.Topic)
 		return
 	}
-	hub.mu.Lock()
-	hub.subscribers[key] = secret
-	hub.mu.Unlock()
+	if mode == "subscribe" {
+		hub.mu.Lock()
+		hub.subscribers[key] = secret
+		hub.mu.Unlock()
+	}
+	if mode == "unsubscribe" {
+		hub.mu.Lock()
+		delete(hub.subscribers, key)
+		hub.mu.Unlock()
+	}
 }
 
 func sendDenial(denialURL *url.URL, topic string) {
