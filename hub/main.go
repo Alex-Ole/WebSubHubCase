@@ -49,11 +49,6 @@ func (h *Hub) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	parseErr := r.ParseForm()
-	if parseErr != nil {
-		http.Error(w, "Invalid subscription request", http.StatusBadRequest)
-		return
-	}
 	contentType := r.Header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil || mediaType != "application/x-www-form-urlencoded" {
@@ -65,9 +60,14 @@ func (h *Hub) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing or invalid charset; only UTF-8 is supported", http.StatusUnsupportedMediaType)
 		return
 	}
-
 	if charset, ok := params["charset"]; ok && strings.ToLower(charset) != "utf-8" {
 		http.Error(w, "Unsupported Charset", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	parseErr := r.ParseForm()
+	if parseErr != nil {
+		http.Error(w, "Invalid subscription request", http.StatusBadRequest)
 		return
 	}
 
@@ -75,30 +75,31 @@ func (h *Hub) HandleSubscribe(w http.ResponseWriter, r *http.Request) {
 	topic := r.FormValue("hub.topic")
 	mode := r.FormValue("hub.mode")
 	secret := r.FormValue("hub.secret")
+	denialURL, URLErr := url.Parse(callback)
 	log.Printf("Received subscription: callback=%s topic=%s mode=%s", callback, topic, mode)
 
-	if callback == "" || topic == "" || (mode != "subscribe" && mode != "unsubscribe") {
+	if URLErr != nil ||
+		callback == "" ||
+		topic == "" ||
+		(mode != "subscribe" && mode != "unsubscribe") ||
+		(mode == "subscribe" && (secret == "" || len(secret) > 199)) {
+
 		http.Error(w, "Invalid subscription request", http.StatusBadRequest)
+		if URLErr == nil {
+			q := denialURL.Query()
+			q.Set("hub.mode", "denied")
+			q.Set("hub.topic", topic)
+			denialURL.RawQuery = q.Encode()
+			http.Get(denialURL.String())
+		} else {
+			log.Printf("invalid callback URL: %v", err)
+		}
 		return
 	}
 
-	//all posts back need sign so require secret (when subscribing only).
-	if mode == "subscribe" && (secret == "" || len(secret) > 199) {
-		http.Error(w, "Invalid subscription request", http.StatusBadRequest)
-		return
-	}
-
-	//could validate deeper
-	_, URLErr := url.Parse(callback)
-	if URLErr != nil {
-		http.Error(w, "Invalid callback URL", http.StatusBadRequest)
-		return
-	}
-
-	//generate a random challenge here
+	// Intent verification
 	challenge := generateRandomString(ChallengeLength)
 	verifyURL := fmt.Sprintf("%s?hub.mode=subscribe&hub.topic=%s&hub.challenge=%s", callback, topic, challenge)
-	// Intent verification
 	resp, err := http.Get(verifyURL)
 	if err != nil {
 		http.Error(w, "Failed to reach subscriber", http.StatusBadGateway)
